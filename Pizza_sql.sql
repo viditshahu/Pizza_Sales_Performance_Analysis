@@ -2,10 +2,10 @@ create database pizza_db;
 
 use pizza_db;
 
-select * 
+select *
 from orders;
 
-select *
+select  *
 from order_details;
 
 select *
@@ -16,40 +16,29 @@ from pizza_types;
 
 -- Chapter 1
 
--- Most ordered pizza
-select pizza_type_id, sum(quantity) as count_pizza
+-- Most ordered pizza name
+select c.name as pizza_name, sum(a.quantity) as count_pizza
 from order_details as a
 join pizzas as b 
 on a.pizza_id = b.pizza_id
-group by pizza_type_id
-order by count_pizza desc;
+join pizza_types as c
+on c.pizza_type_id = b.pizza_type_id
+group by c.name
+order by sum(a.quantity) desc
+limit 5;
 
--- High revenue pizza
-select b.pizza_type_id, sum(a.quantity * b.price) over (partition by b.pizza_type_id) as total_pizza_price
+-- High revenue pizza name
+select c.name as pizza_name, sum(a.quantity * b.price) as total_pizza_price
 from order_details as a
 join pizzas as b 
 on a.pizza_id = b.pizza_id
-order by total_pizza_price desc
+join pizza_types as c
+on c.pizza_type_id = b.pizza_type_id
+group by c.name
+order by sum(a.quantity * b.price) desc
 limit 1;
 
---  Or using
-with cte as (
-     select a.pizza_id, b.pizza_type_id, a.quantity, b.price
-     from order_details as a
-	 join pizzas as b
-     on a.pizza_id = b.pizza_id
- ),
- cte1 as (
-     SELECT pizza_type_id, SUM(quantity * price) AS total_price
-     FROM cte
-     GROUP BY pizza_type_id
-  )
-     select *
-     from cte1
-	 order by total_price desc
-     limit 1;
-
--- Sales trend over time(quantity of orders per months)
+-- Percentage of sales trend over time(quantity of orders per months)
 WITH cte AS (
     SELECT 
         a.order_id, 
@@ -62,7 +51,7 @@ WITH cte AS (
 cte1 AS (
     SELECT 
         DATE_FORMAT(order_date_converted, '%Y-%m') AS order_month,
-        SUM(quantity) AS total_quantity
+        ROUND(SUM(quantity)*100.0/(select sum(quantity) from order_details),2) AS percent_monthly_quantity_contribution
     FROM cte 
     GROUP BY DATE_FORMAT(order_date_converted, '%Y-%m')
 )
@@ -91,40 +80,20 @@ cte2 as (
     SELECT *
     FROM cte2;
 
--- Peak order time
-WITH cte AS (
-     SELECT 
-        a.order_id, 
-        a.pizza_id, 
-        a.quantity,
-        str_to_date(b.time, '%H:%i:%s') as time_conversion
-     FROM order_details AS a
-     JOIN orders AS b ON a.order_id = b.order_id
-),
-cte1 as (
-     select date_format(time_conversion, '%H'), count(distinct order_id)
-     from cte
-     group by date_format(time_conversion, '%H')
-     order by count(distinct order_id) desc
-     )
-     select *
-     from cte1;
-
--- or using
-select *
-        , sum(hourly_orders) over () as total_orders
-		, hourly_orders *100.00/ sum(hourly_orders) over () as contri_orders
+-- Peak order time with percentage contribution
+select *, round(hourly_orders * 100.00 / (select count(order_id) from orders), 2)  as hourly_percent_orders_contribution
 from (
-select hour(time) as hr, count(distinct order_id) as hourly_orders
+select hour(time) as hr, count(order_id) as hourly_orders
 from orders
 group by hour(time)
-) as a;
+) as subquery
+order by hourly_percent_orders_contribution desc;
 
 -- Chapter 2
 
 -- Total orders
 select count(order_id) as total_orders
-from order_details;
+from orders;
 
 -- Total revenue
 with cte as (
@@ -141,27 +110,31 @@ cte1 as (
      from cte1;
      
 -- Highest price pizza
-select max(price) as highest_price
-from pizzas;
+select b.name, a.price as highest_price
+from pizzas a
+join pizza_types b
+on a.pizza_type_id = b.pizza_type_id
+where a.price = (
+    SELECT MAX(price) 
+    FROM pizzas
+);
+
 
 -- Most common pizza size
 with cte as (
-     select a.pizza_id, a.quantity, b.size
+     select b.size, a.quantity
      from order_details as a
-	 join pizzas as b
+     join pizzas as b
      on a.pizza_id = b.pizza_id
-),
-cte1 as (
-     select size, count(quantity)
+)
+     select size, sum(quantity) as total_quantity
      from cte
-     group by size
-     )
-     select *
-     from cte1;
+     group by size 
+     order by  total_quantity desc;
      
 -- Chapter 3
 
--- 5 Highest order_id based on pizza quantity
+-- 5 Highest pizza name based on pizza quantity
 select pt.name, sum(od.quantity) as total_quantity
 from pizza_types as pt 
 left join pizzas as p on p.pizza_type_id = pt.pizza_type_id
@@ -189,91 +162,48 @@ cte1 as (
      
 -- Chapter 4
 
--- Percentage contribution of each pizza type to total revenue
+-- Percentage contribution of each pizza category to total revenue
 with cet as (
-	 select a.order_id, a.pizza_id,b.pizza_type_id, a.quantity, b.price, (a.quantity * b.price) as pizza_price
+	 select c.category, a.quantity, b.price, (a.quantity * b.price) as pizza_price
      from order_details as a
 	 join pizzas as b
      on a.pizza_id = b.pizza_id
+     join pizza_types as c
+     on b.pizza_type_id = c.pizza_type_id
 ),
 cet1 as (
-     select pizza_type_id, (sum(pizza_price) / (select sum(pizza_price) from cet))*100 as percent_contri_per_type
+     select category, sum(pizza_price), round(sum(pizza_price)*100 / (select sum(pizza_price) from cet), 2) as percent_contri_per_category
      from cet
-     group by pizza_type_id
-     order by percent_contri_per_type desc
+     group by category
+     order by percent_contri_per_category desc
      )
      select *
      from cet1;
      
 -- cumulative revenue generated over time 
 with cte as (
-     select b.pizza_type_id, a.order_id, a.pizza_id, (a.quantity * b.price) as pizza_price
+     select b.date, sum(a.quantity * c.price) as pizza_price
      from order_details as a 
-     join pizzas as b
-     on a.pizza_id = b.pizza_id
-),
-cte1 as (
-     select *,sum(pizza_price) over (order by order_id rows between unbounded preceding and current row) as num
-     from cte
+     join orders as b
+     on a.order_id = b.order_id
+     join pizzas as c
+     on a.pizza_id = c.pizza_id
+     group by b.date
 )
-    select * 
-    from cte1
-    order by num asc;
-
--- Top 3 most ordered pizza types based on revenue for each pizza category
-with cte as (
-     select a.order_id, a.pizza_id,b.pizza_type_id, a.quantity, b.price, c.category, (a.quantity * b.price) as pizza_price
-     from order_details as a
-	 join pizzas as b
-     on a.pizza_id = b.pizza_id
-     join pizza_types as c
-     on c.pizza_type_id = b.pizza_type_id
-),
-cte1 as ( 
-     select category, sum(pizza_price)
-     from cte 
-     group by category
-     order by sum(pizza_price) desc
-     )
-     select *
-     from cte1
-     limit 3;
+     select date, sum(pizza_price) over (order by date rows between unbounded preceding and current row) as cumulative_revenue
+     from cte;
      
 -- Chapter 5
 
--- Join the necessary tables to find the total quantity of each pizza category ordered.
-select * from order_details;
-select * from pizza_types;
-select * from pizzas;
-
-select pt.category, sum(od.quantity) as cat_quantity
-from pizza_types as pt
-left join pizzas as p on p.pizza_type_id = pt.pizza_type_id
-left join order_details as od on od.pizza_id = p.pizza_id
-group by pt.category;
-
-
--- Join relevant tables to find the category-wise distribution of pizzas.
+-- Join relevant tables to find the category-wise distribution of pizzas quantity
 with final as (
-select pt.category, sum(od.quantity) as cat_quantity
+select pt.category, sum(od.quantity) as category_quantity_total
 from pizza_types as pt
-left join pizzas as p on p.pizza_type_id = pt.pizza_type_id
-left join order_details as od on od.pizza_id = p.pizza_id
+left join pizzas as p 
+on p.pizza_type_id = pt.pizza_type_id
+left join order_details as od 
+on od.pizza_id = p.pizza_id
 group by pt.category
 )
-
-select *
-, cat_quantity *100.00/ sum(cat_quantity) over () as distribution
+select *, category_quantity_total * 100.00 / sum(category_quantity_total) over () as category_quantity_distribution
 from final;
-
-
--- Group the orders by the date and calculate the average number of pizzas ordered per day.
-
-select avg(total_quantity)
-from (
-select date, sum(od.quantity) as total_quantity
-from orders as o
-left join order_details as od on od.order_id = o.order_id
-group by date
-) as a;
-
